@@ -55,15 +55,16 @@
 
   async function openDoc(meta) {
     const layout = await getLayout(meta.type);
-    cur = { meta, layout, pages: [], strokes: [], photos: {}, photoUrls: {}, undo: [], drawing: null, lastPenUp: 0 };
+    cur = { meta, layout, pages: [], strokes: [], photos: {}, photoUrls: {}, text: {}, undo: [], drawing: null, lastPenUp: 0 };
     const doc = $("#doc"); doc.innerHTML = "";
     const prefix = FORMS[meta.type].prefix;
     for (let i = 0; i < layout.pages; i++) {
       const el = document.createElement("section"); el.className = "page";
       const bg = new Image(); bg.className = "bg"; bg.src = `${prefix}page-${i + 1}.png`; bg.alt = ""; bg.draggable = false;
+      const tcanvas = document.createElement("canvas"); tcanvas.className = "txt";
       const canvas = document.createElement("canvas"); canvas.className = "ink";
-      el.append(bg, canvas); doc.append(el);
-      const p = { el, canvas, ctx: canvas.getContext("2d"), bg, index: i };
+      el.append(bg, tcanvas, canvas); doc.append(el);
+      const p = { el, canvas, ctx: canvas.getContext("2d"), tcanvas, tctx: tcanvas.getContext("2d"), bg, index: i };
       cur.pages.push(p); cur.strokes.push([]); bindInk(p);
     }
     for (const s of layout.slots) {
@@ -76,12 +77,14 @@
       const ink = await DB.get(`d:${meta.id}:ink`);
       if (Array.isArray(ink)) ink.forEach((p, i) => { if (cur.strokes[i] && Array.isArray(p)) cur.strokes[i] = p; });
       for (const s of layout.slots) { const b = await DB.get(`d:${meta.id}:p:${s.id}`); if (b) cur.photos[s.id] = b; }
+      const tx = await DB.get(`d:${meta.id}:text`); if (tx && typeof tx === "object") cur.text = tx;
     } catch (e) { console.warn("load failed", e); }
     layout.slots.forEach(s => renderSlot(s.id));
     setTitle(); setSaved("");
     document.body.className = "editing";
     window.scrollTo({ top: 0 });
     cur.pages.forEach(p => { ro.observe(p.el); sizeCanvas(p); });
+    try { const n = +(localStorage.getItem("fn-hint") || 0); if (n < 3) { localStorage.setItem("fn-hint", n + 1); toast("Write with the Pencil. Or tap a box with your finger to type or dictate."); } } catch (e) {}
   }
 
   async function closeDoc() {
@@ -104,7 +107,9 @@
   function sizeCanvas(p) {
     const r = p.el.getBoundingClientRect(); const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
-    if (w && (p.canvas.width !== w || p.canvas.height !== h)) { p.canvas.width = w; p.canvas.height = h; redraw(p.index); }
+    if (w && (p.canvas.width !== w || p.canvas.height !== h)) {
+      p.canvas.width = p.tcanvas.width = w; p.canvas.height = p.tcanvas.height = h; redraw(p.index); redrawText(p.index);
+    }
   }
 
   /* ---------------- saving ---------------- */
@@ -142,15 +147,111 @@
     p.ctx.clearRect(0, 0, p.canvas.width, p.canvas.height);
     for (const s of cur.strokes[i]) drawStroke(p.ctx, s, k);
   }
+  /* ---------------- typed / dictated text + checkbox ticks ---------------- */
+  const TEXT_INK = "#163172", FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+  const fieldsOn = i => (cur.layout.fields || []).filter(f => f.page === i);
+  function wrap(ctx, text, maxW) {
+    const out = [];
+    for (const para of String(text).split(/\n/)) {
+      let line = "";
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        const t = line ? line + " " + word : word;
+        if (ctx.measureText(t).width <= maxW || !line) line = t; else { out.push(line); line = word; }
+      }
+      out.push(line);
+    }
+    return out.filter((l, i, a) => l || a.length === 1);
+  }
+  function drawFieldText(ctx, f, value, k) {
+    const padX = 6, padY = 3, x = f.x * k, w = (f.w - 2 * padX) * k;
+    const single = f.lines <= 1;
+    const text = single ? String(value).replace(/\s*\n\s*/g, " ") : String(value);
+    const slotH = single ? f.h : f.h / f.lines;
+    let size = Math.min(single ? 17 : 15.5, slotH * (single ? 0.5 : 0.48)), lines, lineH;
+    for (;;) {
+      ctx.font = `${size * k}px ${FONT}`;
+      lines = wrap(ctx, text, w);
+      lineH = Math.max(size * 1.25, single ? 0 : 0);
+      const cap = single ? Math.max(1, Math.floor((f.h - 2 * padY) / lineH)) : Math.max(f.lines, Math.floor((f.h - 2 * padY) / lineH));
+      if (lines.length <= cap || size <= 8) { if (lines.length > cap) { lines = lines.slice(0, cap); lines[cap - 1] = lines[cap - 1].replace(/.{0,2}$/, "…"); } break; }
+      size -= 0.5;
+    }
+    ctx.fillStyle = TEXT_INK; ctx.textBaseline = "alphabetic";
+    if (!single && lines.length <= f.lines) {            // sit on the ruled lines
+      lines.forEach((l, i) => ctx.fillText(l, x + padX * k, (f.y + (i + 1) * slotH - slotH * 0.3) * k));
+    } else {                                              // centre the block in the box
+      const blockH = lines.length * lineH, top = f.y + (f.h - blockH) / 2;
+      lines.forEach((l, i) => ctx.fillText(l, x + padX * k, (top + (i + 0.8) * lineH) * k));
+    }
+  }
+  function drawTick(ctx, f, k) {
+    ctx.strokeStyle = TEXT_INK; ctx.lineWidth = 2.6 * k; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo((f.x + f.w * 0.18) * k, (f.y + f.h * 0.55) * k);
+    ctx.lineTo((f.x + f.w * 0.42) * k, (f.y + f.h * 0.8) * k); ctx.lineTo((f.x + f.w * 0.88) * k, (f.y + f.h * 0.18) * k); ctx.stroke();
+  }
+  function drawTexts(ctx, i, k) {
+    for (const f of fieldsOn(i)) {
+      const v = cur.text[f.id]; if (!v) continue;
+      if (f.kind === "check") drawTick(ctx, f, k); else drawFieldText(ctx, f, v, k);
+    }
+  }
+  function redrawText(i) {
+    const p = cur.pages[i]; const k = p.tcanvas.width / SHEET_W;
+    p.tctx.clearRect(0, 0, p.tcanvas.width, p.tcanvas.height); drawTexts(p.tctx, i, k);
+  }
+  function fieldAt(page, [x, y]) {
+    let best = null;
+    for (const f of fieldsOn(page)) {
+      const pad = f.kind === "check" ? 9 : 5, extraR = f.kind === "check" ? 46 : 0;
+      if (x >= f.x - pad && x <= f.x + f.w + pad + extraR && y >= f.y - pad && y <= f.y + f.h + pad) {
+        const a = f.w * f.h; if (!best || a < best.a) best = { f, a };
+      }
+    }
+    return best && best.f;
+  }
+  async function saveText() {
+    try { await DB.set(`d:${cur.meta.id}:text`, cur.text); touch(); setSaved("Saved"); } catch (e) { console.warn("text save failed", e); }
+  }
+  function setText(f, value, undoable = true) {
+    if (undoable) pushUndo({ type: "text", id: f.id, page: f.page, prev: cur.text[f.id] });
+    if (value) cur.text[f.id] = value; else delete cur.text[f.id];
+    redrawText(f.page); saveText();
+  }
+  function openTextEditor(f) {
+    const body = openModal(f.label);
+    const ta = document.createElement("textarea");
+    ta.className = "dictate"; ta.rows = f.lines > 1 ? Math.min(8, f.lines * 2) : 2; ta.value = cur.text[f.id] || "";
+    ta.setAttribute("autocapitalize", "sentences"); ta.setAttribute("enterkeyhint", "done");
+    body.append(ta);
+    const tip = document.createElement("p"); tip.className = "tip"; tip.textContent = "Tap the 🎤 on the keyboard and talk, or type."; body.append(tip);
+    const done = document.createElement("button"); done.className = "big gold"; done.textContent = "Done"; body.append(done);
+    done.onclick = () => { closeModal(); setText(f, ta.value.trim()); };
+    if (ta.value) {
+      const clr = document.createElement("button"); clr.className = "big light"; clr.textContent = "Clear this box"; body.append(clr);
+      clr.onclick = () => { closeModal(); setText(f, ""); };
+    }
+    if (f.lines <= 1) ta.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); done.click(); } });
+    ta.focus();                                             // same tap, so iPad raises the keyboard
+    try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {}
+  }
+
   function toSheet(p, e) {
     const r = p.canvas.getBoundingClientRect();
     return [(e.clientX - r.left) / r.width * SHEET_W, (e.clientY - r.top) / r.height * SHEET_H, e.pressure || 0.5];
   }
   const isPenLike = e => e.pointerType === "pen" || e.pointerType === "mouse";
+  let lastPointerType = "";
 
   function bindInk(p) {
     const c = p.canvas;
+    c.addEventListener("click", e => {
+      if (!cur || lastPointerType !== "touch") return;    // Pencil taps are ink, not a box tap
+      const f = fieldAt(p.index, toSheet(p, e)); if (!f) return;
+      if (f.kind === "check") { setText(f, cur.text[f.id] ? "" : "x"); }
+      else openTextEditor(f);
+    });
     c.addEventListener("pointerdown", e => {
+      lastPointerType = e.pointerType;
       if (!cur || !isPenLike(e) || e.button > 0) return;
       e.preventDefault(); try { c.setPointerCapture(e.pointerId); } catch (_) {}
       const pt = toSheet(p, e);
@@ -204,6 +305,7 @@
     if (a.type === "ink") { const l = cur.strokes[a.page]; const i = l.lastIndexOf(a.stroke); if (i >= 0) l.splice(i, 1); redraw(a.page); scheduleSave(); }
     else if (a.type === "erase") { const l = cur.strokes[a.page]; a.items.slice().reverse().forEach(it => l.splice(Math.min(it.idx, l.length), 0, it.stroke)); redraw(a.page); scheduleSave(); }
     else if (a.type === "photo") setPhoto(a.id, a.prev, false);
+    else if (a.type === "text") { if (a.prev) cur.text[a.id] = a.prev; else delete cur.text[a.id]; redrawText(a.page); saveText(); }
   }
 
   /* ---------------- photos ---------------- */
@@ -238,12 +340,14 @@
 
   function openPhotoMenu(slot) {
     const has = !!cur.photos[slot.id];
-    const body = openModal(slotLabel(slot) + " photo");
+    const lbl = slotLabel(slot); const body = openModal(/^photo/i.test(lbl) ? lbl : lbl + " photo");
     const btn = (html, cls, fn) => { const b = document.createElement("button"); b.className = "big " + cls; b.innerHTML = html; b.onclick = fn; body.append(b); };
     btn(ICON_CAM.replace("<svg", '<svg width="24" height="24" style="fill:none;stroke:currentColor;stroke-width:1.8"') + (has ? "Retake photo" : "Take photo"), "", () => {
       pendingSlot = slot.id; closeModal(); $("#camInput").value = ""; $("#camInput").click();
     });
-    btn("Choose from Photos (pano)", "light", () => { pendingSlot = slot.id; closeModal(); $("#libInput").value = ""; $("#libInput").click(); });
+    btn("Choose from Photos", "light", () => { pendingSlot = slot.id; closeModal(); $("#libInput").value = ""; $("#libInput").click(); });
+    const tip = document.createElement("p"); tip.style.cssText = "margin:-4px 2px 2px;font-size:13px";
+    tip.textContent = "Pano: take it in the Camera app first, then choose it here."; body.append(tip);
     btn("Paste from iPhone", "light", () => pasteInto(slot.id));
     if (cur.meta.leadId) btn("Use a Listing Lead photo", "light", () => pickFromLead(slot));
     if (has) {
@@ -310,6 +414,7 @@
       ctx.restore();
       ctx.strokeStyle = "#B9BFC9"; ctx.lineWidth = scale * 0.75; ctx.strokeRect(bx, by, bw, bh);
     }
+    drawTexts(ctx, i, scale);
     for (const s of cur.strokes[i]) drawStroke(ctx, s, scale);
     return c;
   }
@@ -400,10 +505,50 @@
     }
   }
 
+  /* Lead -> Details: copy shared answers (typed text and the actual Pencil strokes) */
+  const LEAD_TO_DETAILS = {
+    "seller-name-s": "seller-name-s", "property-address": "property-address", "best-phone": "mobile", "email": "email-1",
+    "mortgage-yes": "current-financing-on-the-property-yes", "mortgage-no": "current-financing-on-the-property-no",
+    "style": "style", "approx-sq-ft": "approx-size-sq-ft", "beds": "bedrooms", "baths": "baths", "parking-garage": "garage",
+  };
+  const BASEMENT = { "basement-finished-yes": "Finished", "basement-finished-partly": "Partly finished", "basement-finished-no": "Unfinished" };
+  function strokeCentre(st) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of st.pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+    return [(x0 + x1) / 2, (y0 + y1) / 2];
+  }
+  const inRect = ([x, y], f, pad) => x >= f.x - pad && x <= f.x + f.w + pad && y >= f.y - pad && y <= f.y + f.h + pad;
+  async function prefillFromLead(detailsId, leadId) {
+    const L = await getLayout("lead"), D = await getLayout("details");
+    const lText = (await DB.get(`d:${leadId}:text`)) || {}, lInk = (await DB.get(`d:${leadId}:ink`)) || [];
+    const text = {}, ink = Array.from({ length: D.pages }, () => []);
+    const fld = (lay, id) => (lay.fields || []).find(f => f.id === id);
+    let n = 0;
+    for (const [from, to] of Object.entries(LEAD_TO_DETAILS)) {
+      const lf = fld(L, from), df = fld(D, to); if (!lf || !df) continue;
+      let got = false;
+      if (lText[from]) { text[to] = lText[from]; got = true; }
+      const strokes = (lInk[lf.page] || []).filter(st => st.pts && st.pts.length && inRect(strokeCentre(st), lf, 4));
+      if (strokes.length) {
+        const k = Math.min(df.w / lf.w, df.h / lf.h, 1);
+        ink[df.page].push(...strokes.map(st => ({ pts: st.pts.map(([x, y, pr]) => [df.x + (x - lf.x) * k, df.y + (y - lf.y) * k, pr]) })));
+        got = true;
+      }
+      if (got) n++;
+    }
+    for (const [from, label] of Object.entries(BASEMENT)) if (lText[from]) { text["basement-bath-bedroom-rec-room"] = label; n++; break; }
+    await DB.set(`d:${detailsId}:text`, text); await DB.set(`d:${detailsId}:ink`, ink);
+    return n;
+  }
+
   async function createDoc(type, name, leadId) {
     const now = Date.now();
     const meta = { id: newId(), type, name: name || "Untitled", leadId: leadId || null, created: now, updated: now };
+    let copied = 0;
+    if (type === "details" && leadId) { try { copied = await prefillFromLead(meta.id, leadId); } catch (e) { console.warn("prefill failed", e); } }
     docs.push(meta); await saveDocs(); await openDoc(meta);
+    if (leadId) toast(copied ? `Copied ${copied} answer${copied > 1 ? "s" : ""} from the Listing Lead. Its photos are in each photo box.`
+                             : "Linked to the Listing Lead. Its photos are in each photo box.");
   }
 
   function nameDialog(title, initial, cta, onOk, extra) {
@@ -439,7 +584,7 @@
   function startDetailsFromLead(lead) {
     const existing = docs.find(d => d.type === "details" && d.leadId === lead.id);
     if (existing) { openDoc(existing); toast("Opened the Listing Details already started for this property."); return; }
-    createDoc("details", lead.name, lead.id).then(() => toast("Listing Details started. Lead photos are available in each photo box."));
+    createDoc("details", lead.name, lead.id);
   }
 
   function confirmDelete(d) {
