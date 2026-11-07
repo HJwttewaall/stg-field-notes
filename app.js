@@ -150,6 +150,11 @@
             const im = el("img", "roomcard"); im.src = L.rooms.card; im.alt = ""; im.draggable = false;
             Object.assign(im.style, { left: pct(g.x, SHEET_W), top: pct(g.y, SHEET_H), width: pct(g.w, SHEET_W), height: pct(g.h, SHEET_H) });
             p.el.insertBefore(im, p.tcanvas);
+            const bar = el("button", "roombar"); bar.setAttribute("aria-label", `Pick room ${n}`);
+            const barH = L.rooms.name.y * 2 + L.rooms.name.h;
+            Object.assign(bar.style, { left: pct(g.x, SHEET_W), top: pct(g.y, SHEET_H), width: pct(g.w, SHEET_W), height: pct(barH, SHEET_H) });
+            bar.onclick = () => openRoomPicker(n);
+            p.el.append(bar);
           });
         }
         const add = el("button", "addroom", "<b>＋</b> Add room");
@@ -447,20 +452,20 @@
   }
 
   /* ---------------- photos (each box holds a list) ---------------- */
-  let pendingSlot = null;
+  let pendingSlot = null, pendingSource = "";
   function renderSlot(id) {
     const b = document.querySelector(`.slot[data-id="${id}"]`); if (!b) return;
     (cur.photoUrls[id] || []).forEach(u => URL.revokeObjectURL(u)); delete cur.photoUrls[id];
     const list = cur.photos[id] || [];
     if (list.length) {
       const urls = cur.photoUrls[id] = list.map(x => URL.createObjectURL(x));
-      b.innerHTML = `<img alt="" draggable="false" src="${urls[0]}">${list.length > 1 ? `<span class="badge">+${list.length - 1}</span>` : ""}`;
+      b.innerHTML = `<img alt="" draggable="false" src="${urls[0]}"><span class="addchip">＋</span>${list.length > 1 ? `<span class="badge">+${list.length - 1}</span>` : ""}`;
       b.classList.add("has"); b.style.background = "";
       const im = b.querySelector("img");
       im.onload = () => { if (im.naturalWidth / im.naturalHeight > WIDE) { im.style.objectFit = "contain"; b.style.background = "#F1F3F6"; } };
     } else {
       const s = slotById(id);
-      b.innerHTML = `<span class="empty">${ICON_CAM}<span>${s && s.room ? "Tap for photos" : "Tap for photo"}</span></span>`;
+      b.innerHTML = `<span class="empty">${ICON_CAM}<span>${s && s.room ? "Tap to add photos" : "Tap to add photos"}</span></span>`;
       b.classList.remove("has"); b.style.background = "";
     }
   }
@@ -488,13 +493,27 @@
     const body = openModal(/^photo/i.test(lbl) ? lbl : `${lbl}: photos`);
     const btn = (html, cls, fn) => { const b = el("button", "big " + cls, html); b.onclick = fn; body.append(b); };
     btn(ICON_CAM.replace("<svg", '<svg width="24" height="24" style="fill:none;stroke:currentColor;stroke-width:1.8"') + (n ? "Take another photo" : "Take photo"), "", () => {
-      pendingSlot = id; closeModal(); $("#camInput").value = ""; $("#camInput").click();
+      pickCamera(id);
     });
-    btn("Choose from Photos", "light", () => { pendingSlot = id; closeModal(); $("#libInput").value = ""; $("#libInput").click(); });
+    btn("Choose from Photos", "light", () => pickLibrary(id));
     body.append(el("p", "tip", "Pano: take it in the Camera app first, then choose it here. You can pick several at once."));
     btn("Paste from iPhone", "light", () => pasteInto(id));
     if (cur.meta.leadId) btn("Use a Listing Lead photo", "light", () => pickFromLead(id));
     if (n) btn(`View or remove photos (${n})`, "light", () => openGallery(id));
+  }
+
+  function pickCamera(id) { pendingSlot = id; pendingSource = "camera"; closeModal(); $("#camInput").value = ""; $("#camInput").click(); }
+  function pickLibrary(id) { pendingSlot = id; pendingSource = "library"; closeModal(); $("#libInput").value = ""; $("#libInput").click(); }
+  function offerAnother(id) {
+    const slot = slotById(id), n = (cur.photos[id] || []).length; if (!slot) return;
+    const body = openModal(`${slotLabel(slot)}: ${n} photo${n > 1 ? "s" : ""} added`);
+    const strip = el("div", "strip"); body.append(strip);
+    const urls = (cur.photoUrls[id] || []).slice(-4);
+    urls.forEach(u => { const im = el("img"); im.src = u; im.alt = ""; strip.append(im); });
+    const b1 = el("button", "big", ICON_CAM.replace("<svg", '<svg width="24" height="24" style="fill:none;stroke:currentColor;stroke-width:1.8"') + "Take another photo");
+    b1.onclick = () => pickCamera(id); body.append(b1);
+    const b2 = el("button", "big light", "Choose from Photos"); b2.onclick = () => pickLibrary(id); body.append(b2);
+    const b3 = el("button", "big gold", "Done"); b3.onclick = closeModal; body.append(b3);
   }
 
   function openGallery(id) {
@@ -747,7 +766,7 @@
     docs.push(meta); await saveDocs(); await openDoc(meta);
     if (leadId) toast(copied ? `Copied ${copied} item${copied > 1 ? "s" : ""} from the Listing Lead, rooms and photos included.`
                              : "Linked to the Listing Lead. Its photos are in each photo box.");
-    else if (type === "lead") setTimeout(() => toast("Tip: in Room by Room, tap the room name to pick the room, then add notes and photos."), 4500);
+    else if (type === "lead") setTimeout(() => toast("Tip: in Room by Room, tap the room bar to pick the room. Tap the photo box to add as many photos as you like."), 4500);
   }
 
   function nameDialog(title, initial, cta, onOk, extra) {
@@ -832,7 +851,7 @@
       try {
         const blobs = []; for (const f of files) blobs.push(await shrink(f));
         setPhotos(id, [...(cur.photos[id] || []), ...blobs]);
-        if (blobs.length > 1) toast(`${blobs.length} photos added.`);
+        offerAnother(id);
       } catch (err) { toast("Couldn't use that photo. Try again."); }
     };
     $("#camInput").addEventListener("change", onPicked);

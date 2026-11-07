@@ -130,3 +130,10 @@ textarea.dictate { width: 100%; font: 19px/1.4 -apple-system, "Helvetica Neue", 
 .gimg img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gdel { height: 40px; border-radius: 9px; border: 1.5px solid var(--line); background: #fff; color: var(--navy); font-size: 14px; }
 .card { width: min(520px, 100%); }
+
+.roombar { position: absolute; z-index: 3; background: transparent; border: 0; padding: 0; cursor: pointer; }
+.roombar:active { background: rgba(184,144,58,.12); }
+.slot .addchip { position: absolute; right: 6px; top: 6px; width: 30px; height: 30px; border-radius: 50%; background: rgba(27,42,73,.85); color: #fff;
+  font-size: 20px; line-height: 30px; text-align: center; font-weight: 700; }
+.strip { display: flex; gap: 6px; overflow-x: auto; }
+.strip img { height: 70px; border-radius: 6px; }

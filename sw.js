@@ -1,5 +1,5 @@
 // Offline cache so the app opens at a listing with no signal. Bump VERSION on every deploy.
-const VERSION = "stg-field-notes-v6";
+const VERSION = "stg-field-notes-v7";
 const ASSETS = ["./", "app.css","app.js","details-layout.json","details-page-1.png","details-page-2.png","details-page-3.png","details-page-4.png","details-page-5.png","details-page-6.png","icon-180.png","icon-192.png","icon-512.png","index.html","jspdf.umd.min.js","lead-layout.json","lead-page-1.png","lead-page-2.png","lead-room-card.png","lead-rooms-page.png","manifest.webmanifest"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => {
