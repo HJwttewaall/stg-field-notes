@@ -4,7 +4,7 @@
   "use strict";
 
   const SHEET_W = 816, SHEET_H = 1056;
-  const INK = "#14213D", PEN_W = 2.1, ERASE_R = 11, PHOTO_MAX = 1600;
+  const INK = "#14213D", PEN_W = 2.1, ERASE_R = 11, PHOTO_MAX_SIDE = 4096, PHOTO_MAX_PIXELS = 2.4e6, WIDE = 2.1;
   const FORMS = {
     lead:    { title: "Listing Lead",    tag: "FIRST VISIT",    layout: "lead-layout.json",    prefix: "lead-" },
     details: { title: "Listing Details", tag: "LISTING SIGNED", layout: "details-layout.json", prefix: "details-" },
@@ -212,8 +212,12 @@
     const b = document.querySelector(`.slot[data-id="${id}"]`); if (!b) return;
     if (cur.photoUrls[id]) { URL.revokeObjectURL(cur.photoUrls[id]); delete cur.photoUrls[id]; }
     const blob = cur.photos[id];
-    if (blob) { const u = cur.photoUrls[id] = URL.createObjectURL(blob); b.innerHTML = `<img alt="" draggable="false" src="${u}">`; b.classList.add("has"); }
-    else { b.innerHTML = `<span class="empty">${ICON_CAM}<span>Tap for photo</span></span>`; b.classList.remove("has"); }
+    if (blob) {
+      const u = cur.photoUrls[id] = URL.createObjectURL(blob); b.innerHTML = `<img alt="" draggable="false" src="${u}">`; b.classList.add("has");
+      const im = b.querySelector("img");
+      im.onload = () => { if (im.naturalWidth / im.naturalHeight > WIDE) { im.style.objectFit = "contain"; b.style.background = "#F1F3F6"; } };
+    }
+    else { b.innerHTML = `<span class="empty">${ICON_CAM}<span>Tap for photo</span></span>`; b.classList.remove("has"); b.style.background = ""; }
   }
   function setPhoto(id, blob, undoable = true) {
     if (undoable) pushUndo({ type: "photo", id, prev: cur.photos[id] || null });
@@ -224,7 +228,7 @@
     const url = URL.createObjectURL(blob);
     try {
       const img = new Image(); img.src = url; await img.decode();
-      const s = Math.min(1, PHOTO_MAX / Math.max(img.naturalWidth, img.naturalHeight));
+      const s = Math.min(1, PHOTO_MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight), Math.sqrt(PHOTO_MAX_PIXELS / (img.naturalWidth * img.naturalHeight)));
       const c = document.createElement("canvas"); c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
       const out = await new Promise(r => c.toBlob(r, "image/jpeg", 0.86)); c.width = c.height = 0; return out;
@@ -239,6 +243,7 @@
     btn(ICON_CAM.replace("<svg", '<svg width="24" height="24" style="fill:none;stroke:currentColor;stroke-width:1.8"') + (has ? "Retake photo" : "Take photo"), "", () => {
       pendingSlot = slot.id; closeModal(); $("#camInput").value = ""; $("#camInput").click();
     });
+    btn("Choose from Photos (pano)", "light", () => { pendingSlot = slot.id; closeModal(); $("#libInput").value = ""; $("#libInput").click(); });
     btn("Paste from iPhone", "light", () => pasteInto(slot.id));
     if (cur.meta.leadId) btn("Use a Listing Lead photo", "light", () => pickFromLead(slot));
     if (has) {
@@ -294,9 +299,15 @@
     for (const s of cur.layout.slots.filter(s => s.page === i && cur.photos[s.id])) {
       const img = await loadImg(cur.photoUrls[s.id]);
       const bx = s.x * scale, by = s.y * scale, bw = s.w * scale, bh = s.h * scale;
-      const r = Math.max(bw / img.naturalWidth, bh / img.naturalHeight), sw = bw / r, sh = bh / r;
       ctx.save(); ctx.beginPath(); ctx.rect(bx, by, bw, bh); ctx.clip();
-      ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, bx, by, bw, bh); ctx.restore();
+      if (img.naturalWidth / img.naturalHeight > WIDE) {          // panorama: show it whole
+        const r = Math.min(bw / img.naturalWidth, bh / img.naturalHeight), w = img.naturalWidth * r, h = img.naturalHeight * r;
+        ctx.fillStyle = "#F1F3F6"; ctx.fillRect(bx, by, bw, bh); ctx.drawImage(img, bx + (bw - w) / 2, by + (bh - h) / 2, w, h);
+      } else {                                                      // normal photo: fill the box
+        const r = Math.max(bw / img.naturalWidth, bh / img.naturalHeight), sw = bw / r, sh = bh / r;
+        ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, bx, by, bw, bh);
+      }
+      ctx.restore();
       ctx.strokeStyle = "#B9BFC9"; ctx.lineWidth = scale * 0.75; ctx.strokeRect(bx, by, bw, bh);
     }
     for (const s of cur.strokes[i]) drawStroke(ctx, s, scale);
@@ -469,11 +480,13 @@
     $("#newDetails").onclick = newDetails;
     document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => { closeModal(); $("#viewer").hidden = true; });
     $("#sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeModal(); });
-    $("#camInput").addEventListener("change", async e => {
+    const onPicked = async e => {
       const f = e.target.files && e.target.files[0]; const id = pendingSlot; pendingSlot = null;
       if (!f || !id || !cur) return;
       try { setPhoto(id, await shrink(f)); } catch (err) { toast("Couldn't use that photo. Try again."); }
-    });
+    };
+    $("#camInput").addEventListener("change", onPicked);
+    $("#libInput").addEventListener("change", onPicked);
     document.addEventListener("keydown", e => { if ((e.metaKey || e.ctrlKey) && e.key === "z" && cur) { e.preventDefault(); undo(); } });
     document.addEventListener("visibilitychange", () => { if (document.hidden) flushInk(); });
 
