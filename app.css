@@ -144,3 +144,6 @@ textarea.dictate { width: 100%; font: 19px/1.4 -apple-system, "Helvetica Neue", 
 .slot .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .slot .tile .more { position: absolute; inset: 0; background: rgba(27,42,73,.6); color: #fff; font-weight: 800;
   font-size: clamp(14px, 2.2vw, 24px); display: flex; align-items: center; justify-content: center; }
+
+.newrow.one { grid-template-columns: 1fr; }
+.newrow.one .newcard { padding: 22px 22px 24px; }

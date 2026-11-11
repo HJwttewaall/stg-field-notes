@@ -1,22 +1,24 @@
-/* STG Field Notes: Listing Lead + Listing Details.
+/* STG Field Notes: Marketing Consultation (Listing Details retired Nov 2026; old ones still open).
    Apple Pencil writes, finger taps type/dictate/tick, finger drags scroll. Saved per property.
-   Listing Lead grows room by room. Works offline. Exports PDF. */
+   The consultation grows room by room. Works offline. Exports PDF. */
 (() => {
   "use strict";
 
   const SHEET_W = 816, SHEET_H = 1056;
   const INK = "#14213D", PEN_W = 2.1, ERASE_R = 11, PHOTO_MAX_SIDE = 4096, PHOTO_MAX_PIXELS = 2.4e6, WIDE = 2.1;
   const FORMS = {
-    lead:    { title: "Listing Lead",    tag: "FIRST VISIT",    layout: "lead-layout.json",    prefix: "lead-" },
+    lead:    { title: "Marketing Consultation", tag: "CONSULTATION",    layout: "lead-layout.json",    prefix: "lead-" },
     details: { title: "Listing Details", tag: "LISTING SIGNED", layout: "details-layout.json", prefix: "details-" },
   };
   // Room picker. "to" = the matching Listing Details row, so notes + photos carry over.
   const ROOM_CHOICES = [
-    ["Kitchen", "kitchen"], ["Breakfast area", "breakfast-area"], ["Living room", "living"], ["Dining room", "dining"],
-    ["Family room", "family"], ["Primary bedroom", "master"], ["Primary bath", "master-bath"], ["Bedroom 2", "bed-2"],
-    ["Bedroom 3", "bed-3"], ["Bedroom 4", "bed-4"], ["Main bath", "main-bath"], ["Powder room", null], ["Basement", "basement"],
-    ["Laundry", "laundry"], ["Office", null], ["Garage", null], ["Front exterior", null], ["Backyard", "backyard"],
+    ["Living room", "living"], ["Dining room", "dining"], ["Family room", "family"], ["Kitchen", "kitchen"],
+    ["Breakfast area", "breakfast-area"], ["Primary bedroom", "master"], ["Primary bath", "master-bath"], ["Bedroom 2", "bed-2"],
+    ["Bedroom 3", "bed-3"], ["Bedroom 4", "bed-4"], ["Main bath", "main-bath"], ["Basement", "basement"],
+    ["Laundry", "laundry"], ["Backyard", "backyard"],
+    ["Powder room", null], ["Office", null], ["Garage", null], ["Front exterior", null],
   ];
+  const WALK_ORDER = 14;          // the first 14 choices are Sue's usual walk-through
   const ROOM_ALIASES = { master: "master", "masterbedroom": "master", "primary": "master", "masterbath": "master-bath", "ensuite": "master-bath",
     "living": "living", "dining": "dining", "family": "family", "bed2": "bed-2", "bed3": "bed-3", "bed4": "bed-4", "bedroom2": "bed-2",
     "bedroom3": "bed-3", "bedroom4": "bed-4", "yard": "backyard", "backyard": "backyard", "laundryroom": "laundry", "breakfast": "breakfast-area" };
@@ -288,6 +290,16 @@
       const v = cur.text[f.id]; if (!v) continue;
       if (f.kind === "check") drawTick(ctx, f, k); else drawFieldText(ctx, f, v, k, f.kind === "room");
     }
+    const bn = cur.layout.banner, addr = cur.meta.name && cur.meta.name !== "Untitled" ? cur.meta.name : "";
+    if (bn && addr && key === "f0") {
+      let size = bn.size; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+      const room = bn.maxX - bn.x - 14;
+      for (;;) { ctx.font = `bold ${size * k}px ${FONT}`; if (ctx.measureText(addr).width <= room * k || size <= 11) break; size -= 0.5; }
+      let t = addr; while (ctx.measureText(t).width > room * k && t.length > 4) t = t.slice(0, -2);
+      if (t !== addr) t = t.replace(/.$/, "…");
+      ctx.fillStyle = "#B8903A"; ctx.fillRect(bn.x * k, (bn.y - size * 0.82) * k, 3 * k, size * 0.95 * k);
+      ctx.fillStyle = "#FFFFFF"; ctx.fillText(t, (bn.x + 12) * k, bn.y * k);
+    }
     const pn = cur.layout.pageNumber, idx = cur.pages.findIndex(p => p.key === key);
     if (pn && idx >= 0) {
       ctx.font = `${9.5 * k}px ${FONT}`; ctx.fillStyle = "#8C96A8"; ctx.textAlign = "right"; ctx.textBaseline = "alphabetic";
@@ -355,6 +367,13 @@
   function openRoomPicker(n) {
     const f = roomFields(n)[0];
     const body = openModal(`Room ${n}: what room is this?`);
+    if (!roomName(n)) {
+      const used = new Set(range(cur.rooms).map(m => roomName(m)));
+      const last = range(n - 1).reverse().map(m => ROOM_CHOICES.findIndex(c => c[0] === roomName(m))).find(i => i >= 0 && i < WALK_ORDER);
+      const next = ROOM_CHOICES.slice(0, WALK_ORDER).find((c, i) => !used.has(c[0]) && (last == null || i > last))
+                || ROOM_CHOICES.slice(0, WALK_ORDER).find(c => !used.has(c[0]));
+      if (next) { const nb = el("button", "big gold", `Next: ${esc(next[0])}`); nb.onclick = () => { closeModal(); setRoomName(n, next[0]); }; body.append(nb); }
+    }
     const grid = el("div", "roomgrid"); body.append(grid);
     for (const [label] of ROOM_CHOICES) {
       const b = el("button", "rchoice" + (roomName(n) === label ? " sel" : ""), esc(label));
@@ -528,7 +547,7 @@
     btn("Choose from Photos", "light", () => pickLibrary(id));
     body.append(el("p", "tip", "Pano: take it in the Camera app first, then choose it here. You can pick several at once."));
     btn("Paste from iPhone", "light", () => pasteInto(id));
-    if (cur.meta.leadId) btn("Use a Listing Lead photo", "light", () => pickFromLead(id));
+    if (cur.meta.leadId) btn("Use a consultation photo", "light", () => pickFromLead(id));
     if (n) btn(`View or remove photos (${n})`, "light", () => openGallery(id));
   }
 
@@ -588,8 +607,8 @@
   async function pickFromLead(id) {
     const lead = docs.find(d => d.id === cur.meta.leadId);
     const photos = lead ? await docPhotos(lead.id) : [];
-    if (!photos.length) { closeModal(); toast(lead ? "That Listing Lead has no photos." : "The linked Listing Lead was deleted."); return; }
-    const body = openModal(`From Listing Lead: ${lead.name}`);
+    if (!photos.length) { closeModal(); toast(lead ? "That consultation has no photos." : "The linked consultation was deleted."); return; }
+    const body = openModal(`From consultation: ${lead.name}`);
     const grid = el("div", "pick"); body.append(grid);
     const urls = [];
     photos.forEach(ph => {
@@ -714,15 +733,14 @@
   function renderHome() {
     const list = $("#list"); list.innerHTML = "";
     const sorted = docs.slice().sort((a, b) => b.updated - a.updated);
-    if (!sorted.length) { list.innerHTML = `<div class="empty-list">No saved forms yet. Start a Listing Lead above.</div>`; return; }
+    if (!sorted.length) { list.innerHTML = `<div class="empty-list">No saved forms yet. Start a Marketing Consultation above.</div>`; return; }
     for (const d of sorted) {
       const f = FORMS[d.type] || FORMS.lead;
       const row = el("div", "item");
-      const linked = d.leadId && docs.find(x => x.id === d.leadId);
-      row.innerHTML = `<button class="open"><span class="tag ${d.type}">${f.tag}</span><b>${esc(d.name || "Untitled")}</b>
-        <small>${f.title} · updated ${fmtDate(d.updated)}${linked ? " · linked to Listing Lead" : ""}</small></button>`;
+            row.innerHTML = `<button class="open"><span class="tag ${d.type}">${f.tag}</span><b>${esc(d.name || "Untitled")}</b>
+        <small>${f.title}${d.type === "details" ? " (retired form)" : ""} · updated ${fmtDate(d.updated)}</small></button>`;
       row.querySelector(".open").onclick = () => openDoc(d);
-      if (d.type === "lead") { const b = el("button", "act go", "Start Details"); b.onclick = () => startDetailsFromLead(d); row.append(b); }
+
       const del = el("button", "act", "Delete"); del.onclick = () => confirmDelete(d); row.append(del);
       list.append(row);
     }
@@ -816,7 +834,7 @@
     go.onclick = () => { const v = $("#pname").value.trim(); closeModal(); onOk(v); };
     setTimeout(() => { try { $("#pname").focus(); } catch (e) {} }, 50);
   }
-  function newLead() { nameDialog("New Listing Lead", "", "Start", name => createDoc("lead", name)); }
+  function newLead() { nameDialog("New Marketing Consultation", "", "Start", name => createDoc("lead", name)); }
   function newDetails() {
     let chosen = null;
     const leads = docs.filter(d => d.type === "lead").sort((a, b) => b.updated - a.updated);
@@ -853,7 +871,7 @@
     nameDialog("Rename", cur.meta.name, "Save", v => {
       if (!v) return;
       const old = cur.meta.name, addr = cur.text["property-address"];
-      cur.meta.name = v; touch(); setTitle();
+      cur.meta.name = v; touch(); setTitle(); redrawText("f0");
       if (!addr || addr === old) {                       // keep the address box in step with the name
         const f = allFields().find(x => x.id === "property-address");
         if (f) setText(f, v, false);
@@ -881,7 +899,7 @@
     $("#bBack").onclick = closeDoc;
     $("#docTitle").onclick = rename;
     $("#newLead").onclick = newLead;
-    $("#newDetails").onclick = newDetails;
+    if ($("#newDetails")) $("#newDetails").onclick = newDetails;
     document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => { closeModal(); $("#viewer").hidden = true; });
     $("#sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeModal(); });
     const onPicked = async e => {
