@@ -1,4 +1,4 @@
-/* STG Field Notes: Marketing Consultation (Listing Details retired Nov 2026; old ones still open).
+/* STG Field Notes: Marketing Consultation -> Listing Details (realtor house reference).
    Apple Pencil writes, finger taps type/dictate/tick, finger drags scroll. Saved per property.
    The consultation grows room by room. Works offline. Exports PDF. */
 (() => {
@@ -315,7 +315,9 @@
     for (const f of fieldsOn(key)) {
       const pad = f.kind === "check" ? 9 : 5, extraR = f.kind === "check" ? 46 : 0;
       if (x >= f.x - pad && x <= f.x + f.w + pad + extraR && y >= f.y - pad && y <= f.y + f.h + pad) {
-        const a = f.w * f.h; if (!best || a < best.a) best = { f, a };
+        // a direct hit on the box beats a hit on a neighbour's label area; then the smaller target wins
+        const direct = x <= f.x + f.w + pad ? 0 : 1, a = f.w * f.h;
+        if (!best || direct < best.direct || (direct === best.direct && a < best.a)) best = { f, a, direct };
       }
     }
     return best && best.f;
@@ -738,22 +740,20 @@
       const f = FORMS[d.type] || FORMS.lead;
       const row = el("div", "item");
             row.innerHTML = `<button class="open"><span class="tag ${d.type}">${f.tag}</span><b>${esc(d.name || "Untitled")}</b>
-        <small>${f.title}${d.type === "details" ? " (retired form)" : ""} · updated ${fmtDate(d.updated)}</small></button>`;
+        <small>${f.title} · updated ${fmtDate(d.updated)}${d.leadId && docs.some(x => x.id === d.leadId) ? " · from Marketing Consultation" : ""}</small></button>`;
       row.querySelector(".open").onclick = () => openDoc(d);
 
+      if (d.type === "lead") { const b = el("button", "act go", "Start Details"); b.onclick = () => startDetailsFromLead(d); row.append(b); }
       const del = el("button", "act", "Delete"); del.onclick = () => confirmDelete(d); row.append(del);
       list.append(row);
     }
   }
 
   /* Lead -> Details: copy shared answers, typed text and the actual Pencil strokes, plus rooms */
-  const LEAD_TO_DETAILS = {
-    "seller-name-s": "seller-name-s", "property-address": "property-address", "best-phone": "mobile", "email": "email-1",
-    "mortgage-yes": "current-financing-on-the-property-yes", "mortgage-no": "current-financing-on-the-property-no",
-    "style": "style", "approx-sq-ft": "approx-size-sq-ft", "beds": "bedrooms", "baths": "baths", "parking-garage": "garage",
-    "age-of-home": "approx-age", "approx-mortgage-remaining": "approx-balance",
-  };
-  const BASEMENT = { "basement-finished-yes": "Finished", "basement-finished-partly": "Partly finished", "basement-finished-no": "Unfinished" };
+  // Consultation -> Details: every field the two forms share (same id) flows through, as text and as
+  // Pencil strokes. Personal details (phones, emails, ownership/mailing, financing, motivation, notes) are
+  // not on the Details form, so they never copy. "notes" is excluded explicitly: same id, different purpose.
+  const NO_COPY = new Set(["notes"]);
   function strokeCentre(st) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const [x, y] of st.pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
@@ -772,15 +772,15 @@
     const fld = (lay, id) => (lay.fields || []).find(f => f.id === id);
     const pushInk = (key, list) => { (ink[key] = ink[key] || []).push(...list); };
     let n = 0;
-    for (const [from, to] of Object.entries(LEAD_TO_DETAILS)) {
-      const lf = fld(L, from), df = fld(D, to); if (!lf || !df) continue;
+    for (const lf of L.fields || []) {
+      if (NO_COPY.has(lf.id)) continue;
+      const df = fld(D, lf.id); if (!df || df.kind !== lf.kind) continue;
       let got = false;
-      if (lText[from]) { text[to] = lText[from]; got = true; }
+      if (lText[lf.id]) { text[df.id] = lText[lf.id]; got = true; }
       const strokes = (lInk[lf.pageKey] || []).filter(st => st.pts && st.pts.length && inRect(strokeCentre(st), lf, 4));
       if (strokes.length) { pushInk(df.pageKey, moveStrokes(strokes, lf, df)); got = true; }
       if (got) n++;
     }
-    for (const [from, label] of Object.entries(BASEMENT)) if (lText[from]) { text["basement-bath-bedroom-rec-room"] = label; n++; break; }
     // rooms: matching names go to that Details row; others go to Additional notes + the "Additional" photo box
     const extras = [];
     for (let r = 1; r <= lRooms; r++) {
@@ -802,11 +802,6 @@
       }
       n++;
     }
-    if (lText["sq-ft-source"]) {
-      text["approx-size-sq-ft"] = text["approx-size-sq-ft"] ? `${text["approx-size-sq-ft"]} (${lText["sq-ft-source"]})` : `Source: ${lText["sq-ft-source"]}`; n++;
-    }
-    const own = lText["ownership-details-names-on-title-occupancy-financing"];
-    if (own) { extras.unshift(`Ownership (from Lead): ${own}`); }
     if (extras.length) text["notes"] = extras.join("\n");
     if (!text["property-address"]) { const lead = docs.find(d => d.id === leadId); if (lead && lead.name && lead.name !== "Untitled") text["property-address"] = lead.name; }
     await DB.set(`d:${detailsId}:text`, text); await DB.set(`d:${detailsId}:ink`, ink);
@@ -821,8 +816,8 @@
     if (type === "details" && leadId) { try { copied = await prefillFromLead(meta.id, leadId); } catch (e) { console.warn("prefill failed", e); } }
     else if (name) await DB.set(`d:${meta.id}:text`, { "property-address": name });   // the form's name is the address
     docs.push(meta); await saveDocs(); await openDoc(meta);
-    if (leadId) toast(copied ? `Copied ${copied} item${copied > 1 ? "s" : ""} from the Listing Lead, rooms and photos included.`
-                             : "Linked to the Listing Lead. Its photos are in each photo box.");
+    if (leadId) toast(copied ? `Copied ${copied} item${copied > 1 ? "s" : ""} from the Marketing Consultation, rooms and photos included.`
+                             : "Linked to the Marketing Consultation. Its photos are in each photo box.");
     else if (type === "lead") setTimeout(() => toast("Tip: in Room by Room, tap the room bar to pick the room. Tap the photo box to add as many photos as you like."), 4500);
   }
 
@@ -840,9 +835,9 @@
     const leads = docs.filter(d => d.type === "lead").sort((a, b) => b.updated - a.updated);
     nameDialog("New Listing Details", "", "Start", name => createDoc("details", name || (chosen && chosen.name), chosen && chosen.id), body => {
       if (!leads.length) return;
-      body.append(el("div", "lbl2", "Link to a Listing Lead (copies its answers, rooms and photos)"));
+      body.append(el("div", "lbl2", "Start from a Marketing Consultation (copies property details, rooms and photos)"));
       leads.slice(0, 6).forEach(l => {
-        const b = el("button", "choice", `${esc(l.name)}<small>Listing Lead · ${fmtDate(l.updated)}</small>`);
+        const b = el("button", "choice", `${esc(l.name)}<small>Marketing Consultation · ${fmtDate(l.updated)}</small>`);
         b.onclick = () => {
           const on = chosen !== l; chosen = on ? l : null;
           body.querySelectorAll(".choice").forEach(x => x.classList.remove("sel")); if (on) b.classList.add("sel");
