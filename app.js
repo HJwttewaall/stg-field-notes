@@ -326,6 +326,24 @@
     try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {}
   }
 
+  function openChoicePicker(f) {
+    const body = openModal(f.label), curV = cur.text[f.id] || "";
+    const grid = el("div", "roomgrid"); body.append(grid);
+    for (const o of (f.options || []).filter(o => o !== "Other")) {
+      const b = el("button", "rchoice" + (curV === o ? " sel" : ""), esc(o));
+      b.onclick = () => { closeModal(); setText(f, o); }; grid.append(b);
+    }
+    if ((f.options || []).includes("Other")) {
+      body.append(el("div", "lbl2", "Other: type or dictate"));
+      const ta = el("textarea", "dictate"); ta.rows = 1; ta.value = f.options.includes(curV) ? "" : curV;
+      ta.setAttribute("enterkeyhint", "done"); body.append(ta);
+      const use = el("button", "big gold", "Use this"); body.append(use);
+      use.onclick = () => { closeModal(); setText(f, ta.value.trim() || "Other"); };
+      ta.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); use.click(); } });
+    }
+    if (curV) { const clr = el("button", "big light", "Clear"); body.append(clr); clr.onclick = () => { closeModal(); setText(f, ""); }; }
+  }
+
   /* ---------------- rooms ---------------- */
   async function addRoom() {
     cur.rooms++; await DB.set(`d:${cur.meta.id}:rooms`, cur.rooms); touch();
@@ -389,6 +407,7 @@
       const f = fieldAt(p.key, toSheet(p, e)); if (!f) return;
       if (f.kind === "check") setText(f, cur.text[f.id] ? "" : "x");
       else if (f.kind === "room") openRoomPicker(f.room);
+      else if (f.kind === "choice") openChoicePicker(f);
       else openTextEditor(f);
     });
     c.addEventListener("pointerdown", e => {
@@ -453,16 +472,27 @@
 
   /* ---------------- photos (each box holds a list) ---------------- */
   let pendingSlot = null, pendingSource = "";
+  // Up to 4 tiles: 1 fills; 2 side by side; 3 = big left + 2 stacked; 4+ = 2x2 (last tile shows +N)
+  function mosaic(n, x, y, w, h, g) {
+    if (n <= 1) return [[x, y, w, h]];
+    const hw = (w - g) / 2, hh = (h - g) / 2;
+    if (n === 2) return [[x, y, hw, h], [x + hw + g, y, hw, h]];
+    if (n === 3) return [[x, y, hw, h], [x + hw + g, y, hw, hh], [x + hw + g, y + hh + g, hw, hh]];
+    return [[x, y, hw, hh], [x + hw + g, y, hw, hh], [x, y + hh + g, hw, hh], [x + hw + g, y + hh + g, hw, hh]];
+  }
   function renderSlot(id) {
     const b = document.querySelector(`.slot[data-id="${id}"]`); if (!b) return;
     (cur.photoUrls[id] || []).forEach(u => URL.revokeObjectURL(u)); delete cur.photoUrls[id];
     const list = cur.photos[id] || [];
     if (list.length) {
       const urls = cur.photoUrls[id] = list.map(x => URL.createObjectURL(x));
-      b.innerHTML = `<img alt="" draggable="false" src="${urls[0]}"><span class="addchip">＋</span>${list.length > 1 ? `<span class="badge">+${list.length - 1}</span>` : ""}`;
+      const tiles = mosaic(list.length, 0, 0, 100, 100, list.length > 1 ? 2 : 0);
+      b.innerHTML = tiles.map((t, i) => `<span class="tile" style="left:${t[0]}%;top:${t[1]}%;width:${t[2]}%;height:${t[3]}%"><img alt="" draggable="false" src="${urls[i]}">${
+        i === 3 && list.length > 4 ? `<span class="more">+${list.length - 4}</span>` : ""}</span>`).join("") + `<span class="addchip">＋</span>`;
       b.classList.add("has"); b.style.background = "";
-      const im = b.querySelector("img");
-      im.onload = () => { if (im.naturalWidth / im.naturalHeight > WIDE) { im.style.objectFit = "contain"; b.style.background = "#F1F3F6"; } };
+      b.querySelectorAll(".tile img").forEach(im => {
+        im.onload = () => { if (im.naturalWidth / im.naturalHeight > WIDE) { im.style.objectFit = "contain"; im.parentNode.style.background = "#F1F3F6"; } };
+      });
     } else {
       const s = slotById(id);
       b.innerHTML = `<span class="empty">${ICON_CAM}<span>${s && s.room ? "Tap to add photos" : "Tap to add photos"}</span></span>`;
@@ -595,16 +625,19 @@
     }
     for (const s of slotsOn(p.key)) {
       const list = cur.photos[s.id] || []; if (!list.length) continue;
-      const img = await loadImg(cur.photoUrls[s.id][0]);
       const bx = s.x * scale, by = s.y * scale, bw = s.w * scale, bh = s.h * scale;
-      drawPhotoInBox(ctx, img, bx, by, bw, bh);
-      ctx.strokeStyle = "#B9BFC9"; ctx.lineWidth = scale * 0.75; ctx.strokeRect(bx, by, bw, bh);
-      if (list.length > 1) {
-        const t = `+${list.length - 1}`; ctx.font = `bold ${12 * scale}px ${FONT}`; const tw = ctx.measureText(t).width;
-        const bw2 = tw + 14 * scale, bh2 = 20 * scale, x2 = bx + bw - bw2 - 6 * scale, y2 = by + bh - bh2 - 6 * scale;
-        ctx.fillStyle = "#1B2A49"; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x2, y2, bw2, bh2, 10 * scale) : ctx.rect(x2, y2, bw2, bh2); ctx.fill();
-        ctx.fillStyle = "#fff"; ctx.textBaseline = "middle"; ctx.fillText(t, x2 + 7 * scale, y2 + bh2 / 2); ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, bw, bh);
+      const tiles = mosaic(list.length, bx, by, bw, bh, list.length > 1 ? 2 * scale : 0);
+      for (let i = 0; i < tiles.length; i++) {
+        const [tx, ty, tw, th] = tiles[i];
+        drawPhotoInBox(ctx, await loadImg(cur.photoUrls[s.id][i]), tx, ty, tw, th);
+        if (i === 3 && list.length > 4) {
+          ctx.fillStyle = "rgba(27,42,73,.6)"; ctx.fillRect(tx, ty, tw, th);
+          ctx.fillStyle = "#fff"; ctx.font = `bold ${Math.min(th * 0.4, 22 * scale)}px ${FONT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(`+${list.length - 4}`, tx + tw / 2, ty + th / 2); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+        }
       }
+      ctx.strokeStyle = "#B9BFC9"; ctx.lineWidth = scale * 0.75; ctx.strokeRect(bx, by, bw, bh);
     }
     drawTexts(ctx, p.key, scale);
     for (const s of cur.strokes[p.key] || []) drawStroke(ctx, s, scale);
@@ -700,6 +733,7 @@
     "seller-name-s": "seller-name-s", "property-address": "property-address", "best-phone": "mobile", "email": "email-1",
     "mortgage-yes": "current-financing-on-the-property-yes", "mortgage-no": "current-financing-on-the-property-no",
     "style": "style", "approx-sq-ft": "approx-size-sq-ft", "beds": "bedrooms", "baths": "baths", "parking-garage": "garage",
+    "age-of-home": "approx-age", "approx-mortgage-remaining": "approx-balance",
   };
   const BASEMENT = { "basement-finished-yes": "Finished", "basement-finished-partly": "Partly finished", "basement-finished-no": "Unfinished" };
   function strokeCentre(st) {
@@ -750,6 +784,11 @@
       }
       n++;
     }
+    if (lText["sq-ft-source"]) {
+      text["approx-size-sq-ft"] = text["approx-size-sq-ft"] ? `${text["approx-size-sq-ft"]} (${lText["sq-ft-source"]})` : `Source: ${lText["sq-ft-source"]}`; n++;
+    }
+    const own = lText["ownership-details-names-on-title-occupancy-financing"];
+    if (own) { extras.unshift(`Ownership (from Lead): ${own}`); }
     if (extras.length) text["notes"] = extras.join("\n");
     if (!text["property-address"]) { const lead = docs.find(d => d.id === leadId); if (lead && lead.name && lead.name !== "Untitled") text["property-address"] = lead.name; }
     await DB.set(`d:${detailsId}:text`, text); await DB.set(`d:${detailsId}:ink`, ink);

@@ -78,7 +78,8 @@ body.editing .home-only { display: none !important; }
 .doc-title { background: transparent; border: 0; color: #fff; font-size: 15px; font-weight: 600; max-width: 22vw;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; padding: 0 4px; }
 .doc-title small { display: block; color: var(--gold); font-weight: 700; font-size: 10.5px; letter-spacing: .6px; }
-@media (max-width: 900px) { #bBack span { display: none; } .doc-title { max-width: 18vw; } }
+@media (max-width: 900px) { .doc-title { max-width: 16vw; } }
+@media (max-width: 640px) { #bBack span { display: none; } }
 
 #home { max-width: 860px; margin: 0 auto; padding: calc(var(--bar-h) + env(safe-area-inset-top) + 24px) 16px 60px; }
 .newrow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -137,3 +138,9 @@ textarea.dictate { width: 100%; font: 19px/1.4 -apple-system, "Helvetica Neue", 
   font-size: 20px; line-height: 30px; text-align: center; font-weight: 700; }
 .strip { display: flex; gap: 6px; overflow-x: auto; }
 .strip img { height: 70px; border-radius: 6px; }
+
+/* photo mosaic */
+.slot .tile { position: absolute; overflow: hidden; background: #fff; }
+.slot .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.slot .tile .more { position: absolute; inset: 0; background: rgba(27,42,73,.6); color: #fff; font-weight: 800;
+  font-size: clamp(14px, 2.2vw, 24px); display: flex; align-items: center; justify-content: center; }
